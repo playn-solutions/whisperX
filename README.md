@@ -1,5 +1,9 @@
-<h1 align="center">WhisperX</h1>
 
+- **WhisperX** with added confidence by returning **avg_logprob**. We were able to show that the **avg_logprob** averaged over all segments, has a strong correlation with the metric **BLEU**.
+
+![Avg logprob vs BLEU.](avg_logprob_vs_bleu.png)
+
+<h1 align="center">WhisperX</h1>
 <p align="center">
   <a href="https://github.com/m-bain/whisperX/stargazers">
     <img src="https://img.shields.io/github/stars/m-bain/whisperX.svg?colorA=orange&colorB=orange&logo=github"
