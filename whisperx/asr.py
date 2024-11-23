@@ -49,7 +49,7 @@ class WhisperModel(faster_whisper.WhisperModel):
         max_initial_timestamp_index = int(
             round(options.max_initial_timestamp / self.time_precision)
         )
-
+        self.model: faster_whisper.WhisperModel
         result = self.model.generate(
                 encoder_output,
                 [prompt] * batch_size,
@@ -59,7 +59,16 @@ class WhisperModel(faster_whisper.WhisperModel):
                 max_length=self.max_length,
                 suppress_blank=options.suppress_blank,
                 suppress_tokens=options.suppress_tokens,
+                return_scores=True,
             )
+
+        # Readd avg_log_prob
+        tokens = [x.sequences_ids[0] for x in result]
+        seq_lens = [len(x) for x in tokens]
+        scores = [x.scores[0] for x in result]
+
+        # Recover the average log prob from the returned score.
+        avg_logprobs = [(score * seq_len**options.length_penalty) / (seq_len + 1 ) for score, seq_len in zip(scores, seq_lens)]
 
         tokens_batch = [x.sequences_ids[0] for x in result]
 
@@ -70,9 +79,9 @@ class WhisperModel(faster_whisper.WhisperModel):
             # text_tokens = [token for token in tokens if token < self.eot]
             return tokenizer.tokenizer.decode_batch(res)
 
-        text = decode_batch(tokens_batch)
+        result = decode_batch(tokens_batch)
 
-        return text
+        return {'text': result, 'avg_logprob': avg_logprobs}
 
     def encode(self, features: np.ndarray) -> ctranslate2.StorageView:
         # When the model is running on multiple GPUs, the encoder output should be moved
@@ -150,7 +159,9 @@ class FasterWhisperPipeline(Pipeline):
 
     def _forward(self, model_inputs):
         outputs = self.model.generate_segment_batched(model_inputs['inputs'], self.tokenizer, self.options)
-        return {'text': outputs}
+        text = outputs['text']
+        avg_logprob = outputs['avg_logprob']
+        return {'text': text, 'avg_logprob': avg_logprob}
 
     def postprocess(self, model_outputs):
         return model_outputs
@@ -207,7 +218,6 @@ class FasterWhisperPipeline(Pipeline):
         if self.suppress_numerals:
             previous_suppress_tokens = self.options.suppress_tokens
             numeral_symbol_tokens = find_numeral_symbol_tokens(self.tokenizer)
-            print(f"Suppressing numeral and symbol tokens")
             new_suppressed_tokens = numeral_symbol_tokens + self.options.suppress_tokens
             new_suppressed_tokens = list(set(new_suppressed_tokens))
             self.options = self.options._replace(suppress_tokens=new_suppressed_tokens)
@@ -221,13 +231,15 @@ class FasterWhisperPipeline(Pipeline):
                 percent_complete = base_progress / 2 if combined_progress else base_progress
                 print(f"Progress: {percent_complete:.2f}%...")
             text = out['text']
+            avg_logprob = out['avg_logprob']
             if batch_size in [0, 1, None]:
                 text = text[0]
             segments.append(
                 {
                     "text": text,
                     "start": round(vad_segments[idx]['start'], 3),
-                    "end": round(vad_segments[idx]['end'], 3)
+                    "end": round(vad_segments[idx]['end'], 3),
+                    'avg_logprob': avg_logprob
                 }
             )
 
@@ -240,7 +252,6 @@ class FasterWhisperPipeline(Pipeline):
             self.options = self.options._replace(suppress_tokens=previous_suppress_tokens)
 
         return {"segments": segments, "language": language}
-
 
     def detect_language(self, audio: np.ndarray):
         if audio.shape[0] < N_SAMPLES:
